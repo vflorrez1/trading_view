@@ -1,0 +1,308 @@
+//@version=5
+//@author LazyBear (Strategy Version)
+strategy("Squeeze Momentum Strategy [LazyBear]", shorttitle="SQZMOM_Strategy", overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=100, process_orders_on_close=true, calc_on_every_tick=false, slippage=0, commission_type=strategy.commission.percent, commission_value=0.1)
+
+// ═══════════════════════════════════════════════════════════════════
+// INPUT PARAMETERS
+// ═══════════════════════════════════════════════════════════════════
+// Indicator Parameters
+bb_length = input.int(20, title="Bollinger Bands Length", group="Indicator Settings")
+bb_mult = input.float(2.0, title="Bollinger Bands Multiplier", group="Indicator Settings")
+kc_length = input.int(20, title="Keltner Channels Length", group="Indicator Settings")
+kc_mult = input.float(1.5, title="Keltner Channels Multiplier", group="Indicator Settings")
+use_true_range = input.bool(true, title="Use True Range for Keltner Channels", group="Indicator Settings")
+
+// Strategy Parameters
+use_stop_loss = input.bool(true, title="Use Stop Loss", group="Risk Management")
+stop_loss_pct = input.float(2.0, title="Stop Loss %", minval=0.1, maxval=10, step=0.1, group="Risk Management")
+use_take_profit = input.bool(true, title="Use Take Profit", group="Risk Management")
+take_profit_pct = input.float(4.0, title="Take Profit %", minval=0.1, maxval=20, step=0.1, group="Risk Management")
+
+// Commission and Slippage
+commission_type = input.string("percent", title="Commission Type", options=["percent", "cash"], group="Trading Costs")
+commission_value = input.float(0.1, title="Commission Value", minval=0, step=0.01, group="Trading Costs")
+slippage_points = input.int(0, title="Slippage (points)", minval=0, group="Trading Costs")
+
+// Date Range
+start_date = input.time(timestamp("2020-01-01"), title="Start Date", group="Backtest Period")
+end_date = input.time(timestamp("2030-12-31"), title="End Date", group="Backtest Period")
+
+// Source
+src = close
+
+// ═══════════════════════════════════════════════════════════════════
+// DATE RANGE FILTER
+// ═══════════════════════════════════════════════════════════════════
+in_date_range = time >= start_date and time <= end_date
+
+// ═══════════════════════════════════════════════════════════════════
+// BOLLINGER BANDS CALCULATION
+// ═══════════════════════════════════════════════════════════════════
+bb_basis = ta.sma(src, bb_length)
+bb_dev = bb_mult * ta.stdev(src, bb_length)
+bb_upper = bb_basis + bb_dev
+bb_lower = bb_basis - bb_dev
+
+// ═══════════════════════════════════════════════════════════════════
+// KELTNER CHANNELS CALCULATION
+// ═══════════════════════════════════════════════════════════════════
+kc_ma = ta.sma(src, kc_length)
+range_val = use_true_range ? ta.tr : (high - low)
+kc_range_ma = ta.sma(range_val, kc_length)
+kc_upper = kc_ma + kc_range_ma * kc_mult
+kc_lower = kc_ma - kc_range_ma * kc_mult
+
+// ═══════════════════════════════════════════════════════════════════
+// SQUEEZE CONDITIONS
+// ═══════════════════════════════════════════════════════════════════
+squeeze_on = (bb_lower > kc_lower) and (bb_upper < kc_upper)
+squeeze_off = (bb_lower < kc_lower) and (bb_upper > kc_upper)
+no_squeeze = not squeeze_on and not squeeze_off
+
+// ═══════════════════════════════════════════════════════════════════
+// MOMENTUM CALCULATION
+// ═══════════════════════════════════════════════════════════════════
+mid_range = math.avg(ta.highest(high, kc_length), ta.lowest(low, kc_length))
+price_diff = src - math.avg(mid_range, ta.sma(src, kc_length))
+momentum = ta.linreg(price_diff, kc_length, 0)
+
+// ═══════════════════════════════════════════════════════════════════
+// SIGNAL GENERATION LOGIC
+// ═══════════════════════════════════════════════════════════════════
+
+// Basic momentum color
+momentum_color = momentum > 0 ? (momentum > nz(momentum[1]) ? color.lime : color.green) : (momentum < nz(momentum[1]) ? color.red : color.maroon)
+
+// State variables for tracking swing direction and signal locks
+var bool in_bullish_swing = false
+var bool in_bearish_swing = false
+var bool buy_signal_fired = false
+var bool sell_signal_fired = false
+
+// Determine current swing based on momentum
+current_bullish = momentum > 0
+current_bearish = momentum <= 0
+
+// Detect swing changes
+swing_to_bullish = current_bullish and not in_bullish_swing
+swing_to_bearish = current_bearish and not in_bearish_swing
+
+// Update swing states
+if swing_to_bullish
+    in_bullish_swing := true
+    in_bearish_swing := false
+    sell_signal_fired := false  // Reset sell signal lock when entering bullish swing
+
+if swing_to_bearish
+    in_bearish_swing := true
+    in_bullish_swing := false
+    buy_signal_fired := false   // Reset buy signal lock when entering bearish swing
+
+// Signal detection
+is_sell_signal = in_bullish_swing and not sell_signal_fired and momentum_color == color.green and momentum_color[1] == color.lime
+
+is_buy_signal = in_bearish_swing and not buy_signal_fired and momentum_color == color.maroon and momentum_color[1] == color.red
+
+// Update signal fired states
+if is_sell_signal
+    sell_signal_fired := true
+
+if is_buy_signal
+    buy_signal_fired := true
+
+// ═══════════════════════════════════════════════════════════════════
+// STRATEGY EXECUTION
+// ═══════════════════════════════════════════════════════════════════
+
+// Entry and exit conditions
+long_entry_condition = is_buy_signal and in_date_range and strategy.position_size == 0
+long_exit_condition = is_sell_signal and in_date_range and strategy.position_size > 0
+
+// Store the signal bar's close price for accurate entry
+var float signal_entry_price = na
+
+// Capture entry price when signal occurs
+if long_entry_condition
+    signal_entry_price := close
+
+// Execute Long Entry (Buy Signal)
+if long_entry_condition
+    strategy.entry("Long", strategy.long, comment="Buy Signal @ " + str.tostring(close, "#.##"))
+
+// Execute Long Exit (Sell Signal)
+if long_exit_condition
+    strategy.close("Long", comment="Sell Signal")
+    signal_entry_price := na
+
+// Stop Loss and Take Profit for Long Positions
+if strategy.position_size > 0
+    // Use the actual average price for stop/target calculations
+    long_stop_price = strategy.position_avg_price * (1 - stop_loss_pct / 100)
+    long_take_profit_price = strategy.position_avg_price * (1 + take_profit_pct / 100)
+    
+    if use_stop_loss or use_take_profit
+        strategy.exit("Long SL/TP", "Long", stop=use_stop_loss ? long_stop_price : na, limit=use_take_profit ? long_take_profit_price : na, comment="SL/TP Exit")
+
+// ═══════════════════════════════════════════════════════════════════
+// VISUAL ELEMENTS
+// ═══════════════════════════════════════════════════════════════════
+
+// Final color determination for histogram
+final_color = momentum_color
+if is_sell_signal
+    final_color := color.blue
+else if is_buy_signal
+    final_color := color.gray
+
+// Zero line color
+zero_line_color = no_squeeze ? color.blue : squeeze_on ? color.black : color.gray
+
+// Plot momentum histogram (in a separate pane)
+plot(momentum, color=final_color, style=plot.style_histogram, linewidth=4, title="Momentum", display=display.none)
+plot(0, color=zero_line_color, style=plot.style_cross, linewidth=2, title="Zero Line", display=display.none)
+
+// Plot signals on main chart - showing where signals actually trigger
+plotshape(long_entry_condition, title="Buy Signal", location=location.belowbar, style=shape.triangleup, size=size.normal, color=color.green, text="BUY")
+plotshape(long_exit_condition, title="Sell Signal", location=location.abovebar, style=shape.triangledown, size=size.normal, color=color.red, text="SELL")
+
+// Add price labels at signal points for clarity
+if long_entry_condition
+    label.new(bar_index, low * 0.997, "Signal: $" + str.tostring(close, "#.##"), style=label.style_label_up, color=color.new(color.green, 50), textcolor=color.white, size=size.tiny)
+
+if long_exit_condition
+    label.new(bar_index, high * 1.003, "Signal: $" + str.tostring(close, "#.##"), style=label.style_label_down, color=color.new(color.red, 50), textcolor=color.white, size=size.tiny)
+
+// Background color for squeeze status
+bgcolor(squeeze_on ? color.new(color.red, 95) : na, title="Squeeze On")
+bgcolor(no_squeeze ? color.new(color.blue, 95) : na, title="No Squeeze")
+
+// ═══════════════════════════════════════════════════════════════════
+// P&L TRACKING
+// ═══════════════════════════════════════════════════════════════════
+
+// Variables to track P&L
+var float cumulative_pnl = 0.0
+var float last_trade_pnl = 0.0
+var int total_trades = 0
+var int winning_trades = 0
+var int losing_trades = 0
+var float actual_entry_price = 0.0
+var int entry_bar = 0
+var float position_pnl = 0.0
+var bool position_opened = false
+
+// Track entry price when position opens - using strategy's actual fill price
+if strategy.position_size > 0 and strategy.position_size[1] == 0
+    actual_entry_price := strategy.opentrades.entry_price(strategy.opentrades - 1)
+    entry_bar := bar_index
+    position_opened := true
+
+// Calculate current position P&L using actual entry price
+if strategy.position_size > 0
+    position_pnl := (close - actual_entry_price) / actual_entry_price * 100
+else
+    position_pnl := 0.0
+
+// Always update stats from strategy built-in variables
+total_trades := strategy.closedtrades
+winning_trades := strategy.wintrades
+losing_trades := strategy.losstrades
+cumulative_pnl := strategy.netprofit / strategy.initial_capital * 100
+
+// Update last trade P&L when a trade closes
+if strategy.position_size == 0 and strategy.position_size[1] > 0 and strategy.closedtrades > 0
+    last_trade_pnl := strategy.closedtrades.profit(strategy.closedtrades - 1) / strategy.initial_capital * 100
+    position_opened := false
+
+// ═══════════════════════════════════════════════════════════════════
+// P&L VISUALIZATION
+// ═══════════════════════════════════════════════════════════════════
+
+// Show P&L labels on entries and exits
+show_trade_labels = input.bool(true, title="Show Trade P&L Labels", group="Display Settings")
+show_info_panel = input.bool(true, title="Show Info Panel", group="Display Settings")
+
+// Variables to track signal prices for comparison
+var float buy_signal_price = na
+var float sell_signal_price = na
+
+// Capture signal prices
+if long_entry_condition
+    buy_signal_price := close
+
+if long_exit_condition
+    sell_signal_price := close
+
+// Plot P&L on trade exits with detailed info
+if show_trade_labels
+    // On trade close - check if we actually closed a trade
+    if strategy.closedtrades > 0 and strategy.closedtrades != strategy.closedtrades[1]
+        trade_entry = strategy.closedtrades.entry_price(strategy.closedtrades - 1)
+        trade_exit = strategy.closedtrades.exit_price(strategy.closedtrades - 1)
+        trade_pnl = strategy.closedtrades.profit(strategy.closedtrades - 1)
+        trade_pnl_pct = trade_pnl / strategy.initial_capital * 100
+        trade_commission = strategy.closedtrades.commission(strategy.closedtrades - 1)
+        
+        // Calculate what P&L should be based on signal prices
+        signal_pnl_pct = ((sell_signal_price - buy_signal_price) / buy_signal_price * 100) - (commission_value * 2)
+        
+        // Calculate expected P&L for verification
+        raw_pnl = (trade_exit - trade_entry) * strategy.closedtrades.size(strategy.closedtrades - 1)
+        expected_pnl_pct = ((trade_exit - trade_entry) / trade_entry * 100) - (commission_value * 2)  // Commission on entry and exit
+        
+        pnl_color = trade_pnl > 0 ? color.green : color.red
+        pnl_text = "SIGNAL: Buy $" + str.tostring(buy_signal_price, "#.##") + " → Sell $" + str.tostring(sell_signal_price, "#.##") + "\nACTUAL: Entry $" + str.tostring(trade_entry, "#.##") + " → Exit $" + str.tostring(trade_exit, "#.##") + "\nSignal P&L: " + str.tostring(signal_pnl_pct, "#.##") + "%\nActual P&L: " + (trade_pnl > 0 ? "+" : "") + str.tostring(trade_pnl_pct, "#.##") + "% ($" + str.tostring(trade_pnl, "#.##") + ")\nComm: $" + str.tostring(trade_commission, "#.##")
+        
+        label.new(bar_index, high * 1.02, pnl_text, style=label.style_label_down, color=pnl_color, textcolor=color.white, size=size.small)
+        
+        // Reset signal prices
+        buy_signal_price := na
+        sell_signal_price := na
+
+// ═══════════════════════════════════════════════════════════════════
+// INFORMATION PANEL
+// ═══════════════════════════════════════════════════════════════════
+
+// Current position info
+var label info_label = na
+label.delete(info_label)
+
+if barstate.islast and show_info_panel
+    // Build info text with comprehensive stats
+    info_text = "═══ POSITION INFO ═══\n" + "Status: " + (strategy.position_size > 0 ? "LONG" : "FLAT") + "\n" + (strategy.position_size > 0 ? "Entry: $" + str.tostring(actual_entry_price, "#.##") + "\n" + "Current: $" + str.tostring(close, "#.##") + "\n" + "P&L: " + (position_pnl > 0 ? "+" : "") + str.tostring(position_pnl, "#.##") + "% ($" + str.tostring((position_pnl/100) * strategy.initial_capital, "#.##") + ")\n" : "") + "\n═══ PERFORMANCE ═══\n" + "Net P&L: " + (cumulative_pnl > 0 ? "+" : "") + str.tostring(cumulative_pnl, "#.##") + "%\n" + "Net Profit: $" + str.tostring(strategy.netprofit, "#,###.##") + "\n" + "Total Trades: " + str.tostring(total_trades) + "\n" + "Win/Loss: " + str.tostring(winning_trades) + "/" + str.tostring(losing_trades) + "\n" + "Win Rate: " + str.tostring(total_trades > 0 ? winning_trades / total_trades * 100 : 0, "#.#") + "%\n" + "Profit Factor: " + str.tostring(strategy.grossprofit / math.max(math.abs(strategy.grossloss), 1), "#.##") + "\n" + "\n═══ INDICATOR ═══\n" + "Momentum: " + str.tostring(momentum, "#.##") + "\n" + "Squeeze: " + (squeeze_on ? "ON" : no_squeeze ? "OFF" : "MID")
+    
+    info_label := label.new(bar_index + 5, high * 1.02, info_text, style=label.style_label_left, color=color.new(color.black, 80), textcolor=color.white, size=size.normal)
+
+// ═══════════════════════════════════════════════════════════════════
+// P&L TABLE
+// ═══════════════════════════════════════════════════════════════════
+
+// Create a table showing cumulative P&L
+show_pnl_table = input.bool(true, title="Show P&L Table", group="Display Settings")
+
+var table pnl_table = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 80))
+
+if show_pnl_table and barstate.islast
+    // Update table headers
+    table.cell(pnl_table, 0, 0, "Metric", text_color=color.white, bgcolor=color.new(color.blue, 50))
+    table.cell(pnl_table, 1, 0, "Value", text_color=color.white, bgcolor=color.new(color.blue, 50))
+    
+    // Current Position P&L
+    table.cell(pnl_table, 0, 1, "Position P&L", text_color=color.white)
+    table.cell(pnl_table, 1, 1, strategy.position_size != 0 ? (position_pnl > 0 ? "+" : "") + str.tostring(position_pnl, "#.##") + "%" : "No Position", text_color=position_pnl > 0 ? color.green : position_pnl < 0 ? color.red : color.gray)
+    
+    // Cumulative P&L
+    table.cell(pnl_table, 0, 2, "Total P&L", text_color=color.white)
+    table.cell(pnl_table, 1, 2, (cumulative_pnl > 0 ? "+" : "") + str.tostring(cumulative_pnl, "#.##") + "%", text_color=cumulative_pnl > 0 ? color.green : cumulative_pnl < 0 ? color.red : color.gray)
+    
+    // Total Return in $
+    table.cell(pnl_table, 0, 3, "Net Profit", text_color=color.white)
+    table.cell(pnl_table, 1, 3, "$" + str.tostring(strategy.netprofit, "#,###.##"), text_color=strategy.netprofit > 0 ? color.green : strategy.netprofit < 0 ? color.red : color.gray)
+    
+    // Win Rate
+    table.cell(pnl_table, 0, 4, "Win Rate", text_color=color.white)
+    table.cell(pnl_table, 1, 4, str.tostring(total_trades > 0 ? winning_trades / total_trades * 100 : 0, "#.#") + "%", text_color=color.white)
+    
+    // Current Streak
+    table.cell(pnl_table, 0, 5, "Trades (W/L)", text_color=color.white)
+    table.cell(pnl_table, 1, 5, str.tostring(winning_trades) + " / " + str.tostring(losing_trades), text_color=color.white)
