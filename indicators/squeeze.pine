@@ -42,24 +42,34 @@ momentum = ta.linreg(priceDiff, kcLength, 0)
 momentumColor = momentum > 0 ? (momentum > nz(momentum[1]) ? color.lime : color.green) : (momentum < nz(momentum[1]) ? color.red : color.maroon)
 
 // Track the last color
-var color last_color = na
+var color last_buy_color = na
+var color last_sell_color = na
+
 
 // Boolean condition for when both match
-isLongSignal = (last_color == color.green and momentumColor == color.lime)
+is_sell_signal = (last_sell_color == color.green and momentumColor == color.lime)
+is_buy_signal = (last_buy_color == color.red and momentumColor == color.maroon)
+
 
 // Dummy series just to plot something (since we can't plot a string)
-dummyValue = isLongSignal ? 1 : na
+new_sell_color = is_sell_signal ? color.blue : momentumColor
+new_buy_color = is_buy_signal ? color.gray : momentumColor
+
+
 
 // Plot the signal when condition is met
-// plot(dummyValue, title="Lcheck", color=color.blue, display=display.data_window)
-// plot(0.3, title="Debug SMA", color=color.yellow)
+// plot(momentum, color=, style=plot.style_histogram, linewidth=10, title="Check")
 
+// plot(0.3, title="Debug SMA", color=color.yellow)
+color_sig = is_sell_signal ? new_sell_color : is_buy_signal ? new_buy_color : momentumColor
 // Update the last color using := (reassignment operator)
-last_color := momentumColor
+last_buy_color := new_buy_color
+last_sell_color := new_sell_color
+
 
 // Color for zero line and squeeze status
 zeroLineColor = noSqueeze ? color.blue : squeezeOn ? color.black : color.gray
 
 // === Plots ===
-plot(momentum, color=momentumColor, style=plot.style_histogram, linewidth=4, title="Momentum")
-plot(0, color=zeroLineColor, style=plot.style_cross, linewidth=2, title="Zero Line / Squeeze Status")
+plot(momentum, color=color_sig, style=plot.style_histogram, linewidth=4, title="Momentum")
+// plot(0, color=zeroLineColor, style=plot.style_cross, linewidth=2, title="Zero Line / Squeeze Status")
