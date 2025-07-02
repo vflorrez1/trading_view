@@ -41,26 +41,28 @@ momentum = ta.linreg(priceDiff, kcLength, 0)
 // Green shades for positive momentum, red shades for negative
 momentumColor = momentum > 0 ? (momentum > nz(momentum[1]) ? color.lime : color.green) : (momentum < nz(momentum[1]) ? color.red : color.maroon)
 
+
 // Track the last color
 var color last_buy_color = na
 var color last_sell_color = na
 
+var buy_locked = false
+var sell_locked = false
+
 
 // Boolean condition for when both match
-is_sell_signal = (last_sell_color == color.green and momentumColor == color.lime)
+is_sell_signal = (last_sell_color == color.lime and momentumColor == color.green)
 is_buy_signal = (last_buy_color == color.red and momentumColor == color.maroon)
+
+// buy_locked = is_buy_signal ? true : 
+
+
 
 
 // Dummy series just to plot something (since we can't plot a string)
 new_sell_color = is_sell_signal ? color.blue : momentumColor
 new_buy_color = is_buy_signal ? color.gray : momentumColor
 
-
-
-// Plot the signal when condition is met
-// plot(momentum, color=, style=plot.style_histogram, linewidth=10, title="Check")
-
-// plot(0.3, title="Debug SMA", color=color.yellow)
 color_sig = is_sell_signal ? new_sell_color : is_buy_signal ? new_buy_color : momentumColor
 // Update the last color using := (reassignment operator)
 last_buy_color := new_buy_color
