@@ -1,0 +1,55 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © zkdev
+
+//@version=5
+strategy('Bull Market Support Band Strategy', overlay=true, commission_type=strategy.commission.percent, commission_value=0.1, slippage=3, default_qty_type=strategy.percent_of_equity, default_qty_value=100)
+
+// Date range inputs
+startDate = input.time(timestamp("01 Jan 2018 00:00 +0000"), "Start Date")
+endDate = input.time(timestamp("31 Dec 2069 23:59 +0000"), "End Date")
+
+// Date filter
+inDateRange = time >= startDate and time <= endDate
+
+// Original indicator parameters
+source = close
+smaLength = 20
+emaLength = 21
+
+// Calculate indicators on weekly timeframe
+sma_weekly = request.security(syminfo.tickerid, "1W", ta.sma(source, smaLength), gaps=barmerge.gaps_on)
+ema_weekly = request.security(syminfo.tickerid, "1W", ta.ema(source, emaLength), gaps=barmerge.gaps_on)
+
+// Fill gaps manually to preserve timeframe logic
+var float sma_filled = na
+var float ema_filled = na
+
+if not na(sma_weekly)
+    sma_filled := sma_weekly
+if not na(ema_weekly)
+    ema_filled := ema_weekly
+
+// Use last known values when current bar has gaps
+outSma = na(sma_weekly) ? sma_filled : sma_weekly
+outEma = na(ema_weekly) ? ema_filled : ema_weekly
+
+// Preserve original plots
+smaPlot = plot(outSma, color=color.new(color.red, 0), title='20w SMA')
+emaPlot = plot(outEma, color=color.new(color.green, 0), title='21w EMA')
+
+fill(smaPlot, emaPlot, color=color.new(color.orange, 75))
+
+// Strategy Logic
+// Go long when price is above both SMA and EMA (bull market support)
+// Go flat when price is below both SMA and EMA
+
+longCondition = close > outSma and close > outEma and not na(outSma) and not na(outEma)
+flatCondition = close < outSma and close < outEma and not na(outSma) and not na(outEma)
+
+// Execute trades only within date range
+if inDateRange
+    if longCondition and strategy.position_size == 0
+        strategy.entry("Long", strategy.long)
+    
+    if flatCondition and strategy.position_size > 0
+        strategy.close("Long")

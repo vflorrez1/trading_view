@@ -1,0 +1,219 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © fluxchart - Modified to Strategy
+// https://www.youtube.com/watch?v=yNn_afGNsjg
+
+//@version=6
+strategy("Bollinger Bands MTF & Kalman Filter Strategy | Flux Charts", 
+         max_labels_count = 500, 
+         overlay = true,
+         commission_type = strategy.commission.percent,
+         commission_value = 0.1,
+         slippage = 3)
+
+// Date Range Inputs
+startDate = input.time(timestamp("2018-01-01"), "Start Date", group = "Date Range")
+endDate = input.time(timestamp("2069-12-31"), "End Date", group = "Date Range")
+
+// Check if current bar is within date range
+inDateRange = time >= startDate and time <= endDate
+
+//LTF inputs
+float ltfMult = input.float(2.0, minval = 0.1, maxval = 5, title = "Multiplier", group = "LTF Bollinger Bands")
+int ltfLength = input.int(20, minval = 1, maxval = 500, title = "Length", group = "LTF Bollinger Bands")
+int ltfBBLinewidth = input.int(1, minval = 1, title = "Linewidth", group = "LTF Bollinger Bands")
+bool plotLTFBB = input.bool(true, title = "Plot BB",  group = "LTF Bollinger Bands")
+color ltfUpperColor = input.color(color.red, inline = "theme", title = "Upper Band", group = "LTF Bollinger Bands")
+color ltfMidColor = input.color(color.blue, inline = "theme", title = "Middle Band", group = "LTF Bollinger Bands")
+color ltfLowerColor = input.color(color.green, inline = "theme", title = "Lower Band", group = "LTF Bollinger Bands")
+
+//HTF inputs
+string HTFOption = input.timeframe('30', title = "Timeframe", group = "HTF Bollinger Bands", tooltip = "Select the Time Frame for the Higher Time Frame Bollinger Band")
+float htfMult = input.float(2.25, minval = 0.1, maxval = 5, title = "Multiplier", group = "HTF Bollinger Bands")
+int htfLength = input.int(20, minval = 1, maxval = 500, title = "Length", group = "HTF Bollinger Bands")
+int htfBBLinewidth = input.int(1, minval = 1, title = "Linewidth", group = "HTF Bollinger Bands")
+bool plotHTFBB = input.bool(true, inline = "toggles", title = "Plot BB ", group = "HTF Bollinger Bands")
+bool plotLabels = input.bool(false, inline = "toggles", title=" Plot HTF Labels ", group = "HTF Bollinger Bands")
+bool signalsEnabled = input.bool(true, inline = "toggles", title = " Display Signals", group = "HTF Bollinger Bands")
+color htfUpperColor = input.color(color.white, inline = "theme", title = "Upper Band", group = "HTF Bollinger Bands")
+color htfLowerColor = input.color(color.white, inline = "theme", title = "Lower Band", group = "HTF Bollinger Bands")
+
+//Gradient/RVOL calculations
+string colorOption = input.string("Gradient",  title="Color Option", options=["Gradient", "Solid", "None"], group = "Gradient")
+int maxOpacity = input.int(99, minval = 0, maxval = 100, inline = "coloring", title = " Opacity Max", group = "Gradient")
+int minOpacity = input.int(55, minval = 0, maxval = 100, inline = "coloring", title = "Opacity Min", group = "Gradient")
+color bullishColor = input.color(#089981, inline = "theme", title = "Bullish Color", group = "Gradient")
+color bearishColor = input.color(color.red, inline = "theme", title = "Bearish Color", group = "Gradient")
+
+bool showErrors = input.bool(true, group = "Overlays", title="Show Errors")
+bool showTable = input.bool(false, group = "Overlays", title="Show Table")
+color textColor = input.color(color.white, group = "Overlays", title = "Text Color")
+
+kalman_filter(src, length) =>
+    var float process_noise = 0.2
+    var float estimate = na
+    var float error_est = 1.0
+    var float measurement_error = 2.0
+    var float kalman_gain = 0.0
+    var float prediction = na
+    if na(estimate)
+        estimate := close[1] 
+    prediction := estimate
+    kalman_gain := error_est / (error_est + measurement_error)
+    estimate := prediction + kalman_gain * (src - prediction)
+    error_est := (1 - kalman_gain) * error_est + process_noise 
+    estimate
+
+getFillTransparency(col, string side) =>
+    float opacity = na
+    float buyVolume = volume * (close-low)/(high-low)
+    float sellVolume = volume * (high-close)/(high-low)
+    buyVolumePct = buyVolume / volume
+    buyVolumePctEMA = ta.ema(buyVolumePct, 2)
+    sellVolumePct = sellVolume / volume
+    sellVolumePctEMA = ta.ema(sellVolumePct, 2)
+    if(side == 'buy')
+        opacity := (buyVolumePctEMA*(maxOpacity - minOpacity)) + minOpacity
+    else if(side == 'sell')
+        opacity := (sellVolumePctEMA*(maxOpacity - minOpacity)) + minOpacity
+    tempColor = color.new(col, opacity)
+    tempColor  
+
+//HTF BB, ema smoothed
+htfBasis = request.security(syminfo.tickerid, HTFOption, ta.sma(close, htfLength), gaps = barmerge.gaps_on)
+htfStdev = request.security(syminfo.tickerid, HTFOption, ta.stdev(close, htfLength), gaps = barmerge.gaps_on)
+htfUpper = htfBasis + htfMult * htfStdev
+htfLower = htfBasis - htfMult * htfStdev
+
+// Apply EMA smoothing
+htfBasis := ta.ema(htfBasis, htfLength)
+htfUpper := ta.ema(htfUpper, htfLength)
+htfLower := ta.ema(htfLower, htfLength)
+
+plotHTFUpper = plot(plotHTFBB ? htfUpper: na, linewidth = htfBBLinewidth, color = htfUpperColor, title = "HTF Upper Band")
+plotHTFLower = plot(plotHTFBB ? htfLower: na, linewidth = htfBBLinewidth, color = htfLowerColor, title = "HTF Lower Band")
+
+//LTF BB, using kalman filters for smoothing
+float dev = ltfMult * ta.stdev(close, ltfLength)
+ltfBasis = kalman_filter(close, ltfLength)
+ltfUpper = ltfBasis + dev
+ltfLower = ltfBasis - dev
+
+plotLTFBasis = plot(plotLTFBB ? ltfBasis: na, linewidth = ltfBBLinewidth, color = ltfMidColor)
+plotLTFUpper = plot(plotLTFBB ? ltfUpper: na, linewidth = ltfBBLinewidth, color = ltfUpperColor)
+plotLTFLower = plot(plotLTFBB ? ltfLower: na, linewidth = ltfBBLinewidth, color = ltfLowerColor)
+
+//Fill Colors 
+color gapFillColorDown = color.new(bullishColor, 50)
+color gapFillColorUp = color.new(bearishColor, 50)
+if(colorOption == "None")
+    gapFillColorDown := na
+    gapFillColorUp := na
+else if(colorOption == "Gradient")
+    gapFillColorDown := getFillTransparency(bullishColor, 'buy')
+    gapFillColorUp := getFillTransparency(bearishColor, 'sell')
+
+// Fill space between HTF Upper and LTF Upper
+fill(plotHTFUpper, plotLTFUpper, color = ltfUpper > htfUpper ? gapFillColorUp : na)
+fill(plotHTFLower, plotLTFLower, color = ltfLower < htfLower ? gapFillColorDown: na)
+
+var bool crossedAbove = false
+var bool crossedBelow = false
+var bool bearSignaled = false
+var bool bullSignaled = false
+if(close>htfUpper)
+    crossedAbove := true 
+if(close<htfLower)
+    crossedBelow := true
+
+//Signals Region
+bool sellSignal = false
+bool buySignal = false
+
+// Simplified signal logic for strategy - triggers on every occurrence
+if crossedAbove and ltfUpper<ltfUpper[1]
+    sellSignal :=true
+if crossedBelow and ltfLower>ltfLower[1]
+    buySignal := true
+
+plotshape(sellSignal and signalsEnabled ? high*1.001 : na, location=location.absolute,style=shape.triangledown, color=bearishColor, size=size.tiny, title="Pivot High")
+plotshape(buySignal and signalsEnabled ? low*0.999 : na, location=location.absolute, style=shape.triangleup, color=bullishColor, size=size.tiny, title="Pivot Low")
+
+if(close<ltfUpper and close<htfUpper)
+    crossedAbove := false
+    bearSignaled := false
+    
+if(close>ltfLower and close > htfLower)
+    crossedBelow := false
+    bullSignaled := false
+
+
+// State tracking variables
+var string last_order = "none"
+var int longCount = 0
+var int shortCount = 0
+maxStack = 10  // Maximum positions in one direction
+
+// Calculate order size (10% of equity per order)
+orderSize = strategy.equity * 0.1 / close
+
+// Long entry logic
+if (buySignal)
+    if (last_order == "short")
+        // Switch from short to long - close all shorts first
+        strategy.close_all(comment = "Close Shorts")
+        shortCount := 0
+        longCount := 1
+        strategy.order("Long_" + str.tostring(longCount), strategy.long, qty=orderSize,comment="Long " + str.tostring(longCount))
+        last_order := "long"
+    else
+        // Add to long position (stacking)
+        if (longCount < maxStack)
+            longCount += 1
+            strategy.order("Long_" + str.tostring(longCount), strategy.long,qty=orderSize,comment="Long " + str.tostring(longCount))
+            last_order := "long"
+
+// Short entry logic
+if (sellSignal)
+    if (last_order == "long")
+        // Switch from long to short - close all longs first
+        strategy.close_all(comment = "Close Longs")
+        longCount := 0
+        shortCount := 1
+        strategy.order("Short_" + str.tostring(shortCount), strategy.short,qty=orderSize,comment="Short " + str.tostring(shortCount))
+        last_order := "short"
+    else
+        // Add to short position (stacking)
+        if (shortCount < maxStack)
+            shortCount += 1
+            strategy.order("Short_" + str.tostring(shortCount), strategy.short,qty=orderSize,comment="Short " + str.tostring(shortCount))
+            last_order := "short"
+
+// Visual debugging
+if (buySignal)
+    label.new(bar_index, high, "L" + str.tostring(longCount), 
+              color=color.green, style=label.style_label_down, size=size.small)
+
+if (sellSignal)
+    label.new(bar_index, low, "S" + str.tostring(shortCount), 
+              color=color.red, style=label.style_label_up, size=size.small)
+
+// Optional: Plot position counts for debugging
+plot(longCount, "Long Count", color=color.green, display=display.data_window)
+plot(shortCount, "Short Count", color=color.red, display=display.data_window)
+
+
+//HTF Table
+var table htfTable =  table.new(position=position.top_right, rows=2, columns=1, bgcolor=color.new(color.aqua, 100), frame_width=1)
+bool ltfIsHigher = timeframe.in_seconds(timeframe.period) > timeframe.in_seconds(HTFOption)
+if barstate.isfirst
+    if(showTable)
+        table.cell(htfTable, row=0, column=0, text="HTF: " + str.tostring(HTFOption), text_color=textColor, bgcolor=color.new(color.aqua, 100))
+    if(ltfIsHigher and showErrors)
+        table.cell(htfTable, row=1, column=0, text="Warning: LTF is higher than HTF", text_color=textColor, bgcolor=color.new(color.aqua, 100))
+
+// Create a label following the HTF BB
+if(plotLabels)
+    label htfLabel1 = label.new(bar_index+6, htfUpper, "HTF Upper BB", color = na, textcolor=textColor, size=size.normal)
+    label htfLabel2 = label.new(bar_index+6, htfLower, "HTF Lower BB", color = na, textcolor=textColor, size=size.normal)
+    label.delete(htfLabel1[1])
+    label.delete(htfLabel2[1])

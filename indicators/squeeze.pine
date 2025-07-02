@@ -1,0 +1,65 @@
+//@author LazyBear
+// Squeeze Momentum Indicator [LazyBear] — simplified and clarified version
+//@version=6
+indicator(shorttitle="SQZMOM_LB", title="Squeeze Momentum Indicator [LazyBear]", overlay=false)
+
+// === User Inputs ===
+bbLength = input.int(20, title="Bollinger Bands Length")
+bbMult = input.float(2.0, title="Bollinger Bands Multiplier")
+kcLength = input.int(20, title="Keltner Channels Length")
+kcMult = input.float(1.5, title="Keltner Channels Multiplier")
+useTrueRange = input.bool(true, title="Use True Range for Keltner Channels")
+
+// === Source ===
+src = close
+
+// === Bollinger Bands Calculation ===
+bbBasis = ta.sma(src, bbLength)
+bbDev = bbMult * ta.stdev(src, bbLength)
+bbUpper = bbBasis + bbDev
+bbLower = bbBasis - bbDev
+
+// === Keltner Channels Calculation ===
+kcMA = ta.sma(src, kcLength)
+rangeVal = useTrueRange ? ta.tr : (high - low)    // True Range or High-Low range
+kcRangeMA = ta.sma(rangeVal, kcLength)
+kcUpper = kcMA + kcRangeMA * kcMult
+kcLower = kcMA - kcRangeMA * kcMult
+
+// === Squeeze Conditions ===
+squeezeOn = (bbLower > kcLower) and (bbUpper < kcUpper)      // Squeeze is ON when BB inside KC
+squeezeOff = (bbLower < kcLower) and (bbUpper > kcUpper)     // Squeeze is OFF when BB outside KC
+noSqueeze = not squeezeOn and not squeezeOff                  // Neither squeeze ON nor OFF
+
+// === Momentum Calculation ===
+// Calculate momentum based on linear regression of price relative to a middle range
+midRange = math.avg(ta.highest(high, kcLength), ta.lowest(low, kcLength))
+priceDiff = src - math.avg(midRange, ta.sma(src, kcLength))
+momentum = ta.linreg(priceDiff, kcLength, 0)
+
+// === Color Logic for Histogram ===
+// Green shades for positive momentum, red shades for negative
+momentumColor = momentum > 0 ? (momentum > nz(momentum[1]) ? color.lime : color.green) : (momentum < nz(momentum[1]) ? color.red : color.maroon)
+
+// Track the last color
+var color last_color = na
+
+// Boolean condition for when both match
+isLongSignal = (last_color == color.green and momentumColor == color.lime)
+
+// Dummy series just to plot something (since we can't plot a string)
+dummyValue = isLongSignal ? 1 : na
+
+// Plot the signal when condition is met
+// plot(dummyValue, title="Lcheck", color=color.blue, display=display.data_window)
+// plot(0.3, title="Debug SMA", color=color.yellow)
+
+// Update the last color using := (reassignment operator)
+last_color := momentumColor
+
+// Color for zero line and squeeze status
+zeroLineColor = noSqueeze ? color.blue : squeezeOn ? color.black : color.gray
+
+// === Plots ===
+plot(momentum, color=momentumColor, style=plot.style_histogram, linewidth=4, title="Momentum")
+plot(0, color=zeroLineColor, style=plot.style_cross, linewidth=2, title="Zero Line / Squeeze Status")
