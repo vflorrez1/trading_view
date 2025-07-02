@@ -1,77 +1,114 @@
-//@author LazyBear
-// Squeeze Momentum Indicator [LazyBear] — simplified and clarified version
-//@version=6
-indicator(shorttitle="SQZMOM_LB", title="Squeeze Momentum Indicator [LazyBear]", overlay=false)
+//@version=5
+//@author LazyBear (Modified - Single Signal Per Swing)
+indicator("Squeeze Momentum Indicator [LazyBear] - Fixed", shorttitle="SQZMOM_LB_Fixed", overlay=false)
 
-// === User Inputs ===
-bbLength = input.int(20, title="Bollinger Bands Length")
-bbMult = input.float(2.0, title="Bollinger Bands Multiplier")
-kcLength = input.int(20, title="Keltner Channels Length")
-kcMult = input.float(1.5, title="Keltner Channels Multiplier")
-useTrueRange = input.bool(true, title="Use True Range for Keltner Channels")
+// ═══════════════════════════════════════════════════════════════════
+// INPUT PARAMETERS
+// ═══════════════════════════════════════════════════════════════════
+bb_length = input.int(20, title="Bollinger Bands Length")
+bb_mult = input.float(2.0, title="Bollinger Bands Multiplier")
+kc_length = input.int(20, title="Keltner Channels Length")
+kc_mult = input.float(1.5, title="Keltner Channels Multiplier")
+use_true_range = input.bool(true, title="Use True Range for Keltner Channels")
 
-// === Source ===
+// Source
 src = close
 
-// === Bollinger Bands Calculation ===
-bbBasis = ta.sma(src, bbLength)
-bbDev = bbMult * ta.stdev(src, bbLength)
-bbUpper = bbBasis + bbDev
-bbLower = bbBasis - bbDev
+// ═══════════════════════════════════════════════════════════════════
+// BOLLINGER BANDS CALCULATION
+// ═══════════════════════════════════════════════════════════════════
+bb_basis = ta.sma(src, bb_length)
+bb_dev = bb_mult * ta.stdev(src, bb_length)
+bb_upper = bb_basis + bb_dev
+bb_lower = bb_basis - bb_dev
 
-// === Keltner Channels Calculation ===
-kcMA = ta.sma(src, kcLength)
-rangeVal = useTrueRange ? ta.tr : (high - low)    // True Range or High-Low range
-kcRangeMA = ta.sma(rangeVal, kcLength)
-kcUpper = kcMA + kcRangeMA * kcMult
-kcLower = kcMA - kcRangeMA * kcMult
+// ═══════════════════════════════════════════════════════════════════
+// KELTNER CHANNELS CALCULATION
+// ═══════════════════════════════════════════════════════════════════
+kc_ma = ta.sma(src, kc_length)
+range_val = use_true_range ? ta.tr : (high - low)
+kc_range_ma = ta.sma(range_val, kc_length)
+kc_upper = kc_ma + kc_range_ma * kc_mult
+kc_lower = kc_ma - kc_range_ma * kc_mult
 
-// === Squeeze Conditions ===
-squeezeOn = (bbLower > kcLower) and (bbUpper < kcUpper)      // Squeeze is ON when BB inside KC
-squeezeOff = (bbLower < kcLower) and (bbUpper > kcUpper)     // Squeeze is OFF when BB outside KC
-noSqueeze = not squeezeOn and not squeezeOff                  // Neither squeeze ON nor OFF
+// ═══════════════════════════════════════════════════════════════════
+// SQUEEZE CONDITIONS
+// ═══════════════════════════════════════════════════════════════════
+squeeze_on = (bb_lower > kc_lower) and (bb_upper < kc_upper)
+squeeze_off = (bb_lower < kc_lower) and (bb_upper > kc_upper)
+no_squeeze = not squeeze_on and not squeeze_off
 
-// === Momentum Calculation ===
-// Calculate momentum based on linear regression of price relative to a middle range
-midRange = math.avg(ta.highest(high, kcLength), ta.lowest(low, kcLength))
-priceDiff = src - math.avg(midRange, ta.sma(src, kcLength))
-momentum = ta.linreg(priceDiff, kcLength, 0)
+// ═══════════════════════════════════════════════════════════════════
+// MOMENTUM CALCULATION
+// ═══════════════════════════════════════════════════════════════════
+mid_range = math.avg(ta.highest(high, kc_length), ta.lowest(low, kc_length))
+price_diff = src - math.avg(mid_range, ta.sma(src, kc_length))
+momentum = ta.linreg(price_diff, kc_length, 0)
 
-// === Color Logic for Histogram ===
-// Green shades for positive momentum, red shades for negative
-momentumColor = momentum > 0 ? (momentum > nz(momentum[1]) ? color.lime : color.green) : (momentum < nz(momentum[1]) ? color.red : color.maroon)
+// ═══════════════════════════════════════════════════════════════════
+// COLOR LOGIC WITH PROPER STATE MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════
 
+// Basic momentum color
+momentum_color = momentum > 0 ? 
+     (momentum > nz(momentum[1]) ? color.lime : color.green) : 
+     (momentum < nz(momentum[1]) ? color.red : color.maroon)
 
-// Track the last color
-var color last_buy_color = na
-var color last_sell_color = na
+// State variables for tracking swing direction and signal locks
+var bool in_bullish_swing = false
+var bool in_bearish_swing = false
+var bool buy_signal_fired = false
+var bool sell_signal_fired = false
 
-var buy_locked = false
-var sell_locked = false
+// Determine current swing based on momentum
+current_bullish = momentum > 0
+current_bearish = momentum <= 0
 
+// Detect swing changes
+swing_to_bullish = current_bullish and not in_bullish_swing
+swing_to_bearish = current_bearish and not in_bearish_swing
 
-// Boolean condition for when both match
-is_sell_signal = (last_sell_color == color.lime and momentumColor == color.green)
-is_buy_signal = (last_buy_color == color.red and momentumColor == color.maroon)
+// Update swing states
+if swing_to_bullish
+    in_bullish_swing := true
+    in_bearish_swing := false
+    sell_signal_fired := false  // Reset sell signal lock when entering bullish swing
 
-// buy_locked = is_buy_signal ? true : 
+if swing_to_bearish
+    in_bearish_swing := true
+    in_bullish_swing := false
+    buy_signal_fired := false   // Reset buy signal lock when entering bearish swing
 
+// Signal detection
+is_sell_signal = in_bullish_swing and not sell_signal_fired and momentum_color == color.green and momentum_color[1] == color.lime
 
+is_buy_signal = in_bearish_swing and not buy_signal_fired and momentum_color == color.maroon and momentum_color[1] == color.red
 
+// Update signal fired states
+if is_sell_signal
+    sell_signal_fired := true
 
-// Dummy series just to plot something (since we can't plot a string)
-new_sell_color = is_sell_signal ? color.blue : momentumColor
-new_buy_color = is_buy_signal ? color.gray : momentumColor
+if is_buy_signal
+    buy_signal_fired := true
 
-color_sig = is_sell_signal ? new_sell_color : is_buy_signal ? new_buy_color : momentumColor
-// Update the last color using := (reassignment operator)
-last_buy_color := new_buy_color
-last_sell_color := new_sell_color
+// Final color determination
+final_color = momentum_color
+if is_sell_signal
+    final_color := color.blue
+else if is_buy_signal
+    final_color := color.gray
 
+// Zero line color
+zero_line_color = no_squeeze ? color.blue : squeeze_on ? color.black : color.gray
 
-// Color for zero line and squeeze status
-zeroLineColor = noSqueeze ? color.blue : squeezeOn ? color.black : color.gray
+// ═══════════════════════════════════════════════════════════════════
+// PLOTS
+// ═══════════════════════════════════════════════════════════════════
+plot(momentum, color=final_color, style=plot.style_histogram, linewidth=4, title="Momentum")
+// plot(0, color=zero_line_color, style=plot.style_cross, linewidth=2, title="Zero Line / Squeeze Status")
 
-// === Plots ===
-plot(momentum, color=color_sig, style=plot.style_histogram, linewidth=4, title="Momentum")
-// plot(0, color=zeroLineColor, style=plot.style_cross, linewidth=2, title="Zero Line / Squeeze Status")
+// ═══════════════════════════════════════════════════════════════════
+// DEBUG INFORMATION (Optional - Remove in production)
+// ═══════════════════════════════════════════════════════════════════
+// bgcolor(is_buy_signal ? color.new(color.gray, 90) : na, title="Buy Signal Background")
+// bgcolor(is_sell_signal ? color.new(color.blue, 90) : na, title="Sell Signal Background")
